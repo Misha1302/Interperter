@@ -1,180 +1,149 @@
-﻿using System.Runtime.CompilerServices;
+﻿namespace Interpreter.VmRuntime;
 
-namespace Interpreter.VmRuntime;
+using System.Runtime.CompilerServices;
 
 public partial class VmRuntime
 {
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool JumpIfOneNumber()
+    private void JumpIfOneNumber()
     {
-        ReadTwoWords(out var a, out var b);
-        if (a == 1) _memory.InstructionPointer = (int)b;
-        return true;
+        ReadTwoNumbers(out var a, out var b);
+        if (a.IsEquals(1)) Memory.InstructionPointer = (int)b;
     }
 
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool NotNumber()
+    private void NotNumber()
     {
-        ReadWordFromStack(out var a);
-        WriteWordToStack(a == 1 ? 0 : 1);
-        return true;
+        ReadNumber(out var a);
+        Memory.ARegister = a.IsEquals(0); // a == 0 ? 1 : 0
     }
 
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool EqualsNumber()
+    private void EqualsNumber()
     {
-        ReadTwoWords(out var a, out var b);
+        ReadTwoNumbers(out var a, out var b);
 
-        WriteWordToStack(a == b);
-        return true;
+        Memory.ARegister = a.IsEquals(b);
     }
 
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool SetNumber()
+    private void LoadConstToA()
     {
-        // a - value, b - position
-        ReadTwoWords(out var a, out var b);
-        // b /= Fraction;
+        var value = Memory.Constants[Memory.InstructionPointer];
 
-        _memory.WriteWord(a, b);
-        return true;
+        Memory.ARegister = value;
     }
 
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool LoadNumber()
+    private void LoadConstToB()
     {
-        ReadWordFromStack(out var a);
+        var value = Memory.Constants[Memory.InstructionPointer];
 
-        // a /= Fraction;
-        var readWord = _memory.ReadWord(a);
-        _memory.WriteWord(readWord, _memory.StackPointer);
-
-        _memory.StackPointer = VmMemory.MoveIntToForward(_memory.StackPointer);
-        return true;
+        Memory.BRegister = value;
     }
 
-    [VmInstruction(16)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool LoadConst()
+    private void DivNumber()
     {
-        var value = _memory.ReadWord(_memory.InstructionPointer);
-        _memory.InstructionPointer = VmMemory.MoveIntToForward(_memory.InstructionPointer);
+        ReadTwoNumbers(out var a, out var b);
 
-        WriteWordToStack(value);
+        if (a == 0) throw new DivideByZeroException($"a={a}; b={b}");
 
-        return true;
+        Memory.ARegister = a / b;
     }
 
-    [VmInstruction(0)]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool DivNumber()
+    private void MulNumber()
     {
-        ReadTwoWords(out var a, out var b);
-        var a2 = (Number256)a * _fraction256;
-        var b2 = (Number256)b;
+        ReadTwoNumbers(out var a, out var b);
+        Memory.ARegister = a * b;
+    }
 
-        if (b2 == 0)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SubNumber()
+    {
+        ReadTwoNumbers(out var a, out var b);
+
+        Memory.ARegister = a - b;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AddNumber()
+    {
+        ReadTwoNumbers(out var a, out var b);
+        Memory.ARegister = a + b;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Exit(int code, Exception? error)
+    {
+        OnProgramExit?.Invoke(this, code, error);
+    }
+
+    private void SetVariable()
+    {
+        var varId = _pointersToInsertVariables[Memory.InstructionPointer];
+        _variables[varId].ChangeValue(Memory.ARegister);
+    }
+
+    private void LoadVariableToA()
+    {
+        var value = _variables[_pointersToInsertVariables[Memory.InstructionPointer]].Value;
+        Memory.ARegister = value;
+    }
+
+    private void LoadVariableToB()
+    {
+        var value = _variables[_pointersToInsertVariables[Memory.InstructionPointer]].Value;
+        Memory.BRegister = value;
+    }
+
+    private void CallMethod()
+    {
+        var obj = Memory.Constants[Memory.InstructionPointer] ?? throw new InvalidOperationException();
+
+        var index = obj switch
         {
-            _errorString = "division by zero";
-            return false;
-        }
+            decimal d => (int)d,
+            int i => i,
+            _ => throw new InvalidCastException(obj.GetType().ToString())
+        };
 
-        _memory.WriteWord((Number128)(a2 / b2), _memory.StackPointer);
-
-        _memory.StackPointer = VmMemory.MoveIntToForward(_memory.StackPointer);
-        return true;
+        _assemblyManager.GetMethodByIndex(index).Invoke(this);
     }
 
-    [VmInstruction(0)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool MulNumber()
+    private void JumpIfNotZero()
     {
-        ReadTwoWords(out var a, out var b);
-        var a2 = (Number256)a;
-        var b2 = (Number256)b;
-
-        WriteWordToStack((Number128)(a2 * b2 / _fraction256));
-        return true;
-    }
-
-    [VmInstruction(0)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool SubNumber()
-    {
-        ReadTwoWords(out var a, out var b);
-        WriteWordToStack(a - b);
-        return true;
-    }
-
-    [VmInstruction(0)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool AddNumber()
-    {
-        ReadTwoWords(out var a, out var b);
-        WriteWordToStack(a + b);
-        return true;
-    }
-
-    [VmInstruction(-1)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool DefaultInstruction()
-    {
-        var operation = _memory.MemoryArray[_memory.InstructionPointer];
-        _errorString = $"unknown operation - {(InstructionName)operation}";
-
-#if DEBUG
-        Exit();
-        throw new ArgumentOutOfRangeException(_errorString);
-#endif
-        return false;
-    }
-
-    [VmInstruction(0)]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void Exit()
-    {
-        OnProgramExit?.Invoke(_errorString, this);
-    }
-
-    [VmInstruction(0)]
-    private bool SetVariableNumber()
-    {
-        if (!_pointersToInsertVariables.TryGetValue(_memory.InstructionPointer, out var currentVarName))
+        var obj = Memory.ARegister ?? throw new InvalidOperationException();
+        switch (obj)
         {
-            _errorString = $"variable at position {_memory.InstructionPointer} not found";
-            return false;
+            case decimal d when !d.IsEquals(0):
+            case true:
+                Memory.InstructionPointer = (int)(Memory.BRegister ?? throw new InvalidOperationException());
+                break;
         }
-
-        ReadWordFromStack(out var word);
-        _variablesNumbers[currentVarName] = word;
-
-        return true;
     }
 
-    [VmInstruction(0)]
-    private bool LoadVariableNumber()
+    private void DuplicateAToB()
     {
-        if (!_pointersToInsertVariables.TryGetValue(_memory.InstructionPointer, out var currentVarName))
+        Memory.BRegister = Memory.ARegister;
+    }
+
+    private void JumpIfZero()
+    {
+        var obj = Memory.ARegister ?? throw new InvalidOperationException();
+        switch (obj)
         {
-            _errorString = $"variable at position {_memory.InstructionPointer} not found";
-            return false;
+            case decimal d when d.IsEquals(0):
+            case false:
+                Memory.InstructionPointer = (int)(Memory.BRegister ?? throw new InvalidOperationException());
+                break;
         }
-
-        WriteWordToStack(_variablesNumbers[currentVarName]);
-
-        return true;
     }
 
-    [VmInstruction(0)]
-    private bool JumpIfNotZeroNumber()
+    private void LessThan()
     {
-        ReadTwoWords(out var a, out var b);
-        if (a != 0) _memory.InstructionPointer = (int)b;
-        return true;
+        ReadTwoNumbers(out var a, out var b);
+        Memory.ARegister = a < b;
     }
 }

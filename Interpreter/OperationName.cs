@@ -2,25 +2,13 @@
 
 public enum InstructionName : byte
 {
-    LoadConstNumber = 1,
-    LoadNumber, // load from memory
-    SetNumber, // set to memory
-
-    Jump,
-    JumpIfLessThanZeroNumber,
-    JumpIfZeroNumber,
-    JumpIfMoreThanZeroNumber,
-
-    JumpIfOneNumber,
-    JumpIfNotZeroNumber,
-    JumpIfNotOneNumber,
+    LoadConstNumberToA = 1,
+    LoadConstNumberToB,
+    
+    JumpIfZero,
 
     NotNumber,
-    CompareNumber,
     EqualsNumber,
-    NotEqualsNumber,
-    AndNumber,
-    OrNumber,
 
     AddNumber,
     SubNumber,
@@ -28,6 +16,11 @@ public enum InstructionName : byte
     DivideNumber,
 
     Halt,
-    SetVariableNumber,
-    LoadVariableNumber
+    SetVariable,
+    LoadVariableToA,
+    LoadVariableToB,
+    CallMethod,
+    DuplicateAToB,
+    LessThan,
+    JumpIfNotZero
 }

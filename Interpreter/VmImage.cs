@@ -1,36 +1,36 @@
-﻿using System.Runtime.CompilerServices;
+﻿namespace Interpreter;
 
-namespace Interpreter;
+using Interpreter.VmRuntime;
 
 public class VmImage
 {
-    private const int StackSize = 16_000;
-    private const int DataSize = 16_000;
-    private const int ProgramSize = 16_000;
+    private const int BaseProgramSize = 512;
 
     private readonly Dictionary<string, int> _goto;
     private readonly Dictionary<string, int> _labels;
     private readonly VmMemory _memory;
-    private readonly Dictionary<int, string> _pointersToInsertVariables;
-    private readonly Dictionary<string, Number128> _variablesNumber;
+    private readonly Dictionary<int, int> _pointersToInsertVariables;
+    private readonly List<VmVariable> _variables;
+    public readonly AssemblyManager AssemblyManager;
 
     public readonly VmRuntime.VmRuntime VmRuntime;
+    public readonly Dictionary<string, int> ImportedMethodsIndexes;
+    private int _index;
 
     public VmImage()
     {
+        ImportedMethodsIndexes = new Dictionary<string, int>();
+        AssemblyManager = new AssemblyManager();
         VmRuntime = new VmRuntime.VmRuntime();
-        _variablesNumber = new Dictionary<string, Number128>();
-        _pointersToInsertVariables = new Dictionary<int, string>();
+        _variables = new List<VmVariable>();
+        _pointersToInsertVariables = new Dictionary<int, int>();
         _labels = new Dictionary<string, int>();
         _goto = new Dictionary<string, int>();
 
-        const int fullSize = ProgramSize + StackSize + DataSize + 16_000;
         _memory = new VmMemory
         {
-            MemoryArray = GC.AllocateArray<byte>(fullSize, pinned: true),// new byte[fullSize],
-            InstructionPointer = 0,
-            StackPointer = int.MinValue,
-            DataPointer = StackSize
+            MemoryArray = GC.AllocateArray<byte>(BaseProgramSize, true),
+            InstructionPointer = 0
         };
     }
 
@@ -38,44 +38,27 @@ public class VmImage
     {
         _memory.MemoryArray[_memory.InstructionPointer] = (byte)operation;
         _memory.InstructionPointer++;
+
+        IncreaseMemArrayIfItNeed();
+    }
+
+    private void IncreaseMemArrayIfItNeed()
+    {
+        var len = _memory.MemoryArray.Length;
+        if (_memory.InstructionPointer < len) return;
+        Array.Resize(ref _memory.MemoryArray, len << 1);
     }
 
 
-    private unsafe void WriteNextNumber(Number128 word, int? position = null)
+    private void WriteNextConstant(object? word, int? position = null)
     {
-        var pos = position ?? _memory.InstructionPointer;
-
-        fixed (byte* w = &_memory.MemoryArray[pos])
-        {
-            Unsafe.Write(w, word);
-        }
-
-        _memory.InstructionPointer = VmMemory.MoveIntToForward(_memory.InstructionPointer);
+        var pos = position ?? _memory.InstructionPointer - 1;
+        _memory.Constants.Add(pos, word);
     }
 
-    public void WriteNextNumber(string s, bool multiply = true)
+    public void WriteNextConstant(decimal number)
     {
-        s = s.Replace("_", "");
-        var div = 0;
-        if (s.Contains('.'))
-        {
-            div = s.Split(".")[^1].Length;
-            s = s.Replace(".", "");
-        }
-
-        Number128 i = 1;
-        if (s[0] == '-')
-        {
-            i = -1;
-            s = s[1..];
-        }
-
-        if (multiply) i *= Interpreter.VmRuntime.VmRuntime.Fraction;
-
-        i *= Number128.Parse(s);
-        i /= Number128.Parse('1' + new string('0', div));
-
-        WriteNextNumber(i);
+        WriteNextConstant(number, null);
     }
 
     public VmMemory GetMemory()
@@ -85,65 +68,78 @@ public class VmImage
         ReplaceGoto();
 
         _memory.InstructionPointer = 0;
-        _memory.StackPointer = _memory.MemoryArray.Length >> 1;
-        _memory.StackStart = _memory.StackPointer;
-        _memory.StackEnd = _memory.StackPointer + StackSize;
 
         return _memory;
     }
 
     private void ReplaceGoto()
     {
-        foreach (var (key, value) in _goto)
+        foreach (var (key, position) in _goto)
         {
-            var position = _labels[key];
-            WriteNextNumber(position, value);
+            var value = _labels[key];
+            WriteNextConstant(value, position);
         }
     }
 
-    public void CreateVariableNumber(string varName)
+    public void CreateVariable(string varName)
     {
-        _variablesNumber.Add(varName, _memory.DataPointer);
-        _memory.DataPointer = VmMemory.MoveIntToForward(_memory.DataPointer);
+        _variables.Add(new VmVariable(varName));
     }
 
-    public void SetVariableNumber(string varName)
+    public void SetVariable(string varName)
     {
-        WriteNextOperation(InstructionName.SetVariableNumber);
-        var keyValuePair = _variablesNumber.First(x => x.Key == varName);
-        _pointersToInsertVariables.Add(_memory.InstructionPointer, keyValuePair.Key);
+        WriteNextOperation(InstructionName.SetVariable);
+
+        var keyValuePair = _variables.First(x => x.Name == varName);
+        _pointersToInsertVariables.Add(_memory.InstructionPointer - 1, keyValuePair.Id);
     }
 
-    public void LoadVariableNumber(string varName)
+    public void LoadVariable(string varName, bool toA = true)
     {
-        WriteNextOperation(InstructionName.LoadVariableNumber);
+        WriteNextOperation(toA ? InstructionName.LoadVariableToA : InstructionName.LoadVariableToB);
 
-        var keyValuePair = _variablesNumber.First(x => x.Key == varName);
-        _pointersToInsertVariables.Add(_memory.InstructionPointer, keyValuePair.Key);
+        var keyValuePair = _variables.First(x => x.Name == varName);
+        _pointersToInsertVariables.Add(_memory.InstructionPointer - 1, keyValuePair.Id);
     }
 
     public void SetLabel(string label)
     {
-        _labels.Add(label, _memory.InstructionPointer);
+        _labels.Add(label, _memory.InstructionPointer - 1);
     }
 
     public void GotoIfNotZeroNumber(string label)
     {
-        WriteNextOperation(InstructionName.LoadConstNumber);
-        // when calling the GetMemory method, this integer will be replaced by the number you need to jump to
-        _goto.Add(label, _memory.InstructionPointer);
-        WriteNextNumber("-100");
-
-        WriteNextOperation(InstructionName.JumpIfNotZeroNumber);
+        Goto(label, InstructionName.JumpIfNotZero);
     }
 
-    public Dictionary<int, string> GetPointersToInsertVariables()
+    public void Goto(string label, InstructionName jumpInstruction)
+    {
+        _goto.Add(label, _memory.InstructionPointer);
+        WriteNextOperation(InstructionName.LoadConstNumberToB);
+        WriteNextOperation(jumpInstruction);
+    }
+
+    public Dictionary<int, int> GetPointersToInsertVariables()
     {
         return _pointersToInsertVariables;
     }
 
-    public Dictionary<string, Number128> GetVariables()
+    public IEnumerable<VmVariable> GetVariables()
     {
-        return _variablesNumber;
+        return _variables;
+    }
+
+    public void ImportMethodFromAssembly(string dllPath, string methodName)
+    {
+        AssemblyManager.ImportMethodFromAssembly(dllPath, methodName);
+        ImportedMethodsIndexes.Add(methodName, _index);
+        _index++;
+    }
+
+    public void CreateFunction(string name)
+    {
+        WriteNextOperation(InstructionName.Halt);
+        
+        SetLabel(name);
     }
 }

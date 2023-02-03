@@ -1,6 +1,6 @@
-﻿using System.Diagnostics;
+﻿namespace Interpreter;
 
-namespace Interpreter;
+using System.Diagnostics;
 
 public static class Program
 {
@@ -13,25 +13,37 @@ public static class Program
         vmImage.VmRuntime.OnProgramStart += OnProgramStart;
         vmImage.VmRuntime.OnProgramExit += OnProgramExit;
 
-
-        vmImage.CreateVariableNumber("counter");
-
-        vmImage.WriteNextOperation(InstructionName.LoadConstNumber);
-        vmImage.WriteNextNumber("100_000_000");
-        vmImage.SetVariableNumber("counter");
-
-        vmImage.SetLabel("label");
+        const string dllPath = @"D:\DRIVE\Programming\ProgrammingLanguages\CSharp\Interpreter\Interpreter\MainLibrary\bin\Debug\net7.0\MainLibrary.dll";
+        vmImage.ImportMethodFromAssembly(dllPath, "Print");
+        vmImage.ImportMethodFromAssembly(dllPath, "Input");
+        vmImage.ImportMethodFromAssembly(dllPath, "ToNumber");
         
-        vmImage.LoadVariableNumber("counter");
-        vmImage.WriteNextOperation(InstructionName.LoadConstNumber);
-        vmImage.WriteNextNumber("1");
+        vmImage.CreateVariable("i");
+        
+        
+
+        vmImage.WriteNextOperation(InstructionName.LoadConstNumberToA);
+        vmImage.WriteNextConstant(1_000_000);
+        
+        vmImage.SetVariable("i");
+        
+        
+        vmImage.SetLabel("loopLabel");
+
+        vmImage.LoadVariable("i");
+        vmImage.WriteNextOperation(InstructionName.CallMethod);
+        vmImage.WriteNextConstant(vmImage.ImportedMethodsIndexes["Print"]);
+        
+        vmImage.WriteNextOperation(InstructionName.LoadConstNumberToB);
+        vmImage.WriteNextConstant(12.22345m);
         vmImage.WriteNextOperation(InstructionName.SubNumber);
-        vmImage.SetVariableNumber("counter");
+        vmImage.SetVariable("i");
         
-        // vmImage.LoadVariableNumber("counter");
-        
-        vmImage.LoadVariableNumber("counter");
-        vmImage.GotoIfNotZeroNumber("label");
+        vmImage.WriteNextOperation(InstructionName.LoadConstNumberToB);
+        vmImage.WriteNextConstant(0);
+        vmImage.WriteNextOperation(InstructionName.LessThan);
+        vmImage.Goto("loopLabel", InstructionName.JumpIfZero);
+
 
 
         vmImage.VmRuntime.Run(vmImage);
@@ -44,7 +56,7 @@ public static class Program
         _stopwatch = Stopwatch.StartNew();
     }
 
-    private static void OnProgramExit(string errorString, VmRuntime.VmRuntime memory)
+    private static void OnProgramExit(VmRuntime.VmRuntime vmRuntime, int code, Exception? error)
     {
         var ms = -1L;
         if (_stopwatch != null)
@@ -56,7 +68,7 @@ public static class Program
         Console.WriteLine($"Program completed in {ms} ms");
 
 
-        if (errorString == string.Empty)
+        if (code == 0)
         {
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("Program executed without errors");
@@ -64,11 +76,11 @@ public static class Program
         else
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.Error.WriteLine($"Program executed with error [{errorString}]");
+            Console.Error.WriteLine($"Program executed with error [{error}]");
         }
 
         Console.ResetColor();
 
-        memory.PrintState();
+        vmRuntime.PrintState();
     }
 }

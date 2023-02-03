@@ -1,27 +1,24 @@
-﻿using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
+﻿namespace Interpreter.VmRuntime;
 
-namespace Interpreter.VmRuntime;
+using System.Globalization;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 
 public partial class VmRuntime
 {
-    public static readonly Number128 Fraction = 10_000_000_000_000_000_000;
-    private static readonly Number256 _fraction256 = (Number256)Fraction;
+    private AssemblyManager _assemblyManager;
 
-    private string _errorString = string.Empty;
+    private Dictionary<int, int> _pointersToInsertVariables = new(64);
+    private Dictionary<int, VmVariable> _variables = new(64);
+    public VmMemory Memory;
 
-    private VmMemory _memory;
-
-    private Dictionary<int, string> _pointersToInsertVariables = new(4096);
-    private Dictionary<string, Number128> _variablesNumbers = new(64);
-
-    public Action<string, VmRuntime>? OnProgramExit;
+    public Action<VmRuntime, int, Exception?>? OnProgramExit;
     public Action? OnProgramStart;
 
     public VmRuntime()
     {
-        _memory = new VmMemory();
+        Memory = new VmMemory();
+        _assemblyManager = new AssemblyManager();
 
         PrepareInstructionsForExecution();
     }
@@ -39,133 +36,111 @@ public partial class VmRuntime
     {
         SetImage(image);
 
-        // var operations = () => true;
+        var instructions = GenerateDictToExecute();
 
+        Execute(instructions);
+    }
 
-        var ip = _memory.InstructionPointer;
-        var operation = _memory.MemoryArray[ip];
+    private void Execute(IReadOnlyList<Instruction> instructions)
+    {
+        OnProgramStart?.Invoke();
 
-        var instructions = new Dictionary<int, Func<bool>>();
+#if !DEBUG
+        try
+#endif
+        {
+            var instructionsCount = instructions.Count - 1;
+            Memory.InstructionPointer = -1;
+            do
+            {
+                Memory.InstructionPointer++;
+                instructions[Memory.InstructionPointer]();
+            } while (Memory.InstructionPointer < instructionsCount);
+        }
+#if !DEBUG
+        catch (Exception ex)
+        {
+            Exit(1, ex);
+            return;
+        }
+#endif
+
+        Exit(0, null);
+    }
+
+    private List<Instruction> GenerateDictToExecute()
+    {
+        var ip = Memory.InstructionPointer;
+        var operation = Memory.MemoryArray[ip];
+
+        var instructions = new List<Instruction>();
 
         while (operation != (byte)InstructionName.Halt)
         {
-            Func<bool> instr = operation switch
+            Instruction instr = operation switch
             {
                 (byte)InstructionName.AddNumber => AddNumber,
                 (byte)InstructionName.SubNumber => SubNumber,
                 (byte)InstructionName.MultiplyNumber => MulNumber,
                 (byte)InstructionName.DivideNumber => DivNumber,
-                (byte)InstructionName.LoadConstNumber => LoadConst,
-                (byte)InstructionName.LoadNumber => LoadNumber,
-                (byte)InstructionName.SetNumber => SetNumber,
+                (byte)InstructionName.LoadConstNumberToA => LoadConstToA,
+                (byte)InstructionName.LoadConstNumberToB => LoadConstToB,
                 (byte)InstructionName.EqualsNumber => EqualsNumber,
                 (byte)InstructionName.NotNumber => NotNumber,
-                (byte)InstructionName.JumpIfOneNumber => JumpIfOneNumber,
-                (byte)InstructionName.JumpIfNotZeroNumber => JumpIfNotZeroNumber,
-                (byte)InstructionName.SetVariableNumber => SetVariableNumber,
-                (byte)InstructionName.LoadVariableNumber => LoadVariableNumber,
-                _ => DefaultInstruction
+                (byte)InstructionName.JumpIfZero => JumpIfZero,
+                (byte)InstructionName.JumpIfNotZero => JumpIfNotZero,
+                (byte)InstructionName.SetVariable => SetVariable,
+                (byte)InstructionName.LoadVariableToA => LoadVariableToA,
+                (byte)InstructionName.LoadVariableToB => LoadVariableToB,
+                (byte)InstructionName.CallMethod => CallMethod,
+                (byte)InstructionName.DuplicateAToB => DuplicateAToB,
+                (byte)InstructionName.LessThan => LessThan,
+                _ => throw new InvalidOperationException($"unknown instruction - {(InstructionName)operation}")
             };
-            instructions.Add(ip, instr);
+            instructions.Add(instr);
 
-            var attribute = instr.Method.GetCustomAttribute<VmInstruction>()
-                            ?? throw new NullReferenceException(instr.Method.Name);
             ip++;
-            ip += attribute.SizeOfArgs;
 
-            operation = _memory.MemoryArray[ip];
+            operation = Memory.MemoryArray[ip];
         }
 
-        instructions.Add(ip, () => false);
-
-        OnProgramStart?.Invoke();
-
-        Func<bool> currentInstruction;
-        do
-        {
-            currentInstruction = instructions[_memory.InstructionPointer];
-            _memory.InstructionPointer++;
-        } while (currentInstruction.Invoke());
-
-        Exit();
+        return instructions;
     }
 
     private void SetImage(VmImage image)
     {
         _pointersToInsertVariables = image.GetPointersToInsertVariables();
-        _variablesNumbers = image.GetVariables();
-        _memory = image.GetMemory();
+        _variables = image.GetVariables().ToDictionary(x => x.Id);
+        Memory = image.GetMemory();
+        _assemblyManager = image.AssemblyManager;
     }
 
     public void PrintState()
     {
-        if (_memory == null) throw new NullReferenceException();
-        // _memory!!.MemoryArray;
+        if (Memory == null) throw new NullReferenceException();
 
-        var stackInBytes = _memory.MemoryArray[_memory.StackStart.._memory.StackPointer];
+        foreach (var variable in _variables)
+            Console.WriteLine($"{variable.Value.Name}={variable.Value.Value}");
 
-        var stackInInt128 = new Number128[stackInBytes.Length / VmMemory.Step];
-        for (var i = 0; i < stackInBytes.Length; i = VmMemory.MoveIntToForward(i))
-            stackInInt128[i / VmMemory.Step] = _memory.ReadWord(i + _memory.StackStart);
+        string a, b;
+        if (Memory.ARegister is decimal decA) a = decA.ToString(CultureInfo.InvariantCulture);
+        else a = Memory.ARegister?.ToString() ?? string.Empty;
+        if (Memory.BRegister is decimal decB) b = decB.ToString(CultureInfo.InvariantCulture);
+        else b = Memory.BRegister?.ToString() ?? string.Empty;
 
-        Console.WriteLine(
-            $"SP={_memory.StackPointer - _memory.StackStart} IP={_memory.InstructionPointer}");
-        Console.WriteLine(
-            $"STACK_SIZE={stackInBytes.Length} STACK=[{string.Join(",", stackInBytes)}]");
-        Console.WriteLine(
-            $"STACK_INT128_SIZE={stackInInt128.Length} STACK_INT128=[{string.Join(",", stackInInt128.Select(DecimalToString))}]");
+        Console.WriteLine($"rA={a}; rB={b}");
     }
 
-    private static string DecimalToString(Number128 a)
+    private void ReadTwoNumbers(out decimal a, out decimal b)
     {
-        var str = a.ToString();
-        str = str.PadLeft(38, '0');
-        str = str.Insert(19, ".");
-
-        str = str.Trim('0').TrimEnd('.');
-        if (string.IsNullOrEmpty(str)) str = "0";
-        str = Regex.Replace(str, "^\\.", "0.");
-        str = Regex.Replace(str, "^-\\.", "-0.");
-
-        return str;
+        a = (decimal)(Memory.ARegister ?? throw new InvalidOperationException());
+        b = (decimal)(Memory.BRegister ?? throw new InvalidOperationException());
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ReadTwoWords(out Number128 a, out Number128 b)
+    private void ReadNumber(out decimal a)
     {
-        ReadWordFromStack(out b);
-        ReadWordFromStack(out a);
+        a = (decimal)(Memory.ARegister ?? throw new InvalidOperationException());
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ReadWordFromStack(out Number128 word)
-    {
-        if (_memory.StackStart > _memory.StackPointer)
-        {
-            _errorString = "attempt to read a word below the stack";
-#if DEBUG
-            throw new Exception(_errorString);
-#endif
-            Exit();
-            word = default;
-            return;
-        }
-
-        _memory.StackPointer = VmMemory.MoveIntToBackward(_memory.StackPointer);
-        word = _memory.ReadWord(_memory.StackPointer);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteWordToStack(Number128 word)
-    {
-        if (_memory.StackEnd <= _memory.StackPointer)
-        {
-            _errorString = $"stack overflow (sizeOfStack={_memory.StackEnd - _memory.StackStart})";
-            Exit();
-            return;
-        }
-
-        _memory.WriteWord(word, _memory.StackPointer);
-        _memory.StackPointer = VmMemory.MoveIntToForward(_memory.StackPointer);
-    }
+    private delegate void Instruction();
 }
